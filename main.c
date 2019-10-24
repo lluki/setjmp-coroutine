@@ -37,8 +37,8 @@ void firstTask(void *context)
 void debug_jmpbuf(jmp_buf bb){
     for(int i=0;i<16;i++){
         char * extra = "\t";
-        if(i==3) extra = "(rsp)\t";
-        if(i==2) extra = "(ip) \t";
+        if(i==7) extra = "(rsp)\t";
+        if(i==6) extra = "(ip) \t";
         printf("jmpbuf[%d] %s = %"PRIx64"\n", i, extra, bb[0].__jmpbuf[i]);
     }
 }

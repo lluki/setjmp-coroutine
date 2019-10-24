@@ -50,8 +50,8 @@ static CallbackBlock globalCallbackBlock;
 Coro *Coro_new(void)
 {
 	Coro *self = (Coro *)calloc(1, sizeof(Coro));
-	self->stack = calloc(1, CORO_STACK_SIZE);
-    printf("allocated stack at %p\n", self->stack);
+	self->stack = calloc(1, CORO_STACK_SIZE + 16);
+    printf("Coro_new self=%p, self->stack=%p\n", self, self->stack);
 	return self;
 }
 
@@ -91,41 +91,29 @@ static void Coro_Start(void);
 
 void Coro_startCoro_(Coro *self, Coro *other, void *context, CoroStartCallback *callback)
 {
-	//CallbackBlock sblock;
-	//CallbackBlock *block = &sblock;
-	////CallbackBlock *block = malloc(sizeof(CallbackBlock)); // memory leak
+    printf("Coro_startCoro_ self=%p,other=%p\n", self, other);
     globalCallbackBlock.context = context;
     globalCallbackBlock.func = callback;
-	//block->context = context;
-	//block->func    = callback;
 	
 	Coro_setup(other);
-    printf("Coro_Start=%p\n", Coro_Start);
-    printf("other->env after Coro_setup\n");
-    debug_jmpbuf(other->env);
 	Coro_switchTo_(self, other);
-}
-
-void Coro_StartWithArg(CallbackBlock *block)
-{
-	(block->func)(block->context);
-	printf("Scheduler error: returned from coro start function\n");
-	exit(-1);
 }
 
 
 static void Coro_Start(void)
 {
-	CallbackBlock block = globalCallbackBlock;
-	Coro_StartWithArg(&block);
+    //printf("In Coro_Start. func=%p, context=%p\n",globalCallbackBlock.func,globalCallbackBlock.context);
+	(globalCallbackBlock.func)(globalCallbackBlock.context);
+	printf("Scheduler error: returned from coro start function\n");
+	exit(-1);
 }
  
 
 
 void Coro_switchTo_(Coro *self, Coro *next)
 {
-    printf("switchTo %p\n", next);
-    debug_jmpbuf(next->env);
+    printf("Coro_switchTo %p\n", next);
+    //debug_jmpbuf(next->env);
 	if (setjmp(self->env) == 0)
 	{
 		longjmp(next->env, 1);
@@ -134,9 +122,19 @@ void Coro_switchTo_(Coro *self, Coro *next)
 
 // ---- setup ------------------------------------------
 
+/* Libc is doing pointer mangling, grep for PTR_MANGLE 
+ * in libc */
+static uintptr_t ptr_mangle(uintptr_t ptr){
+        asm ("xor %%fs:%c2, %0\n"               
+             "rol $0x11, %0"           
+             : "=r" (ptr)                 
+             : "0" (ptr),                 
+               "i" (0x30) /* (offsetof (tcbhead_t, pointer_guard)) */);
+        return ptr;
+}
+
 static void Coro_setup(Coro *self)
 {
-	setjmp(self->env);
 	/* This is probably not nice in that it deals directly with
 	* something with __ in front of it.
 	*
@@ -157,7 +155,15 @@ static void Coro_setup(Coro *self)
 	*   /usr/include/gento-multilib/amd64/bits/setjmp.h
 	*   Which was ultimatly included from setjmp.h in /usr/include. */
     
-    //XX we need to to ROL 11 of this address
-	self->env[0].__jmpbuf[6] = ((unsigned long)(Coro_stack(self))) << 11;
-	self->env[0].__jmpbuf[7] = (((unsigned long)Coro_Start)) << 11;
+    // Let sp point to the top of the stack (self->stack points the the bottom). 
+    uintptr_t sp_mangled = ptr_mangle((uintptr_t)self->stack + CORO_STACK_SIZE);
+    uintptr_t ip_mangled = ptr_mangle((uintptr_t)Coro_Start);
+    printf("Coro_setup  ip=%p, ip_mangled=0x%"PRIx64"\n",
+            Coro_Start, ip_mangled);
+    printf("            sp=%p, sp_mangled=0x%"PRIx64"\n",
+            self->stack, sp_mangled);
+    
+	setjmp(self->env);
+	self->env[0].__jmpbuf[6] = sp_mangled;
+	self->env[0].__jmpbuf[7] = ip_mangled;
 }
